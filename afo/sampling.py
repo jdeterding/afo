@@ -4,6 +4,41 @@ from typing import List, Iterable, Union, Optional
 from numpy.lib import recfunctions as rfs
 
 
+def _full_factorial_mesh_grid(
+        *variables: Iterable[Union[str, int, float, bool]],
+        stratify: bool = False,
+        random_seed: Optional[int] = None) -> List[np.array]:
+
+    # First convert all iterable variable inputs into numpy arrays.
+    variable_arrays = [np.array(vi) for vi in variables]
+    # Create mesh grid with matrix indexing resulting grids are in the same order as the input arrays.
+    # ie grids.shape == tuple([len(arr) for arr in variable_arrays])
+    grids = np.meshgrid(*variable_arrays, indexing="ij")
+    # Determine the new shape of the mesh grid after float boundaries have been converted to points.
+    org_shape = grids[0].shape
+    new_shape = [i - 1 if np.issubdtype(g.dtype, np.floating) else i for g, i in zip(grids, org_shape)]
+    # Determine how to slice mesh grid into high and low boundary pairs.
+    low_slices = tuple([slice(None) if old == new else slice(None, -1) for old, new in zip(org_shape, new_shape)])
+    high_slices = tuple([slice(None) if old == new else slice(1, None) for old, new in zip(org_shape, new_shape)])
+    # Create bool index to get low and high grid components.
+    low_inxs = np.zeros(org_shape, dtype=bool)
+    high_inxs = np.zeros(org_shape, dtype=bool)
+    low_inxs[low_slices] = True
+    high_inxs[high_slices] = True
+
+    if stratify and random_seed:
+        np.random.seed(random_seed)
+
+    for inx in range(len(grids)):
+        if np.issubsctype(grids[inx].dtype, np.floating):
+            if stratify:
+                grids[inx] = np.random.uniform(grids[inx][low_inxs], grids[inx][high_inxs])
+            else:
+                grids[inx] = grids[inx][low_inxs] + (grids[inx][high_inxs] - grids[inx][low_inxs]) / 2
+        else:
+            grids[inx] = grids[inx][high_inxs]  # High inx or low inx don't matter here just need the shape
+    return grids
+
 def full_factorial(
         *variables: Iterable[Union[str, int, float, bool]],
         variable_names: Optional[List[str]] = None,
@@ -58,34 +93,8 @@ def full_factorial(
         to evaluate.
 
     """
-    # First convert all iterable variable inputs into numpy arrays.
-    variable_arrays = [np.array(vi) for vi in variables]
-    # Create mesh grid with matrix indexing resulting grids are in the same order as the input arrays.
-    # ie grids.shape == tuple([len(arr) for arr in variable_arrays])
-    grids = np.meshgrid(*variable_arrays, indexing="ij")
-    # Determine the new shape of the mesh grid after float boundaries have been converted to points.
-    org_shape = grids[0].shape 
-    new_shape = [i-1 if np.issubdtype(g.dtype, np.floating) else i for g, i in zip(grids, org_shape)]
-    # Determine how to slice mesh grid into high and low boundary pairs.
-    low_slices = tuple([slice(None) if old == new else slice(None, -1) for old, new in zip(org_shape, new_shape)])
-    high_slices = tuple([slice(None) if old == new else slice(1, None) for old, new in zip(org_shape, new_shape)])
-    # Create bool index to get low and high grid components.
-    low_inxs = np.zeros(org_shape, dtype=bool)
-    high_inxs = np.zeros(org_shape, dtype=bool)
-    low_inxs[low_slices] = True
-    high_inxs[high_slices] = True
 
-    if stratify and random_seed:
-        np.random.seed(random_seed)
-
-    for inx in range(len(grids)):
-        if np.issubsctype(grids[inx].dtype, np.floating):
-            if stratify:
-                grids[inx] = np.random.uniform(grids[inx][low_inxs], grids[inx][high_inxs])
-            else:
-                grids[inx] = grids[inx][low_inxs] + (grids[inx][high_inxs] - grids[inx][low_inxs])/2
-        else:
-            grids[inx] = grids[inx][high_inxs]  # High inx or low inx don't matter here just need the shape
+    grids = _full_factorial_mesh_grid(*variables, stratify=stratify, random_seed=random_seed)
 
     raveled_grids = [np.ravel(grid) for grid in grids]
 
@@ -96,9 +105,90 @@ def full_factorial(
         dtypes = ", ".join([str(arr.dtype) for arr in raveled_grids])
         return np.rec.array(raveled_grids, dtype=dtypes)
 
-# def uniform_projection()
+#def uniform_projection(
+#        *variables: Iterable[Union[str, int, float, bool]],
+#        variable_names: Optional[List[str]] = None,
+#        stratify: bool = False,
+#        random_seed: Optional[int] = None) -> np.recarray:
 
 # def random_uniform():
+
+import numpy as np
+from typing import Tuple
+import itertools as its
+
+"""
+Assume that the shape of the axes is sorted from longest to shortest shuch that,
+    S = (s_1, s_2, ..., s_i, s_(i-1), ..., s_N)
+    where,
+        s_i <= s_(i-1)
+Then start be determining a valid uniform projection for the first two axes. Note there are two cases. When s_1==s_2 and
+when s_1>s_2. The first case we will find is a subset of the second case. So we begin with an example of the second
+case.
+EX:
+      0   1   2   3   4   5 <-- Long Axis
+    0-x---|---|---|---x---|
+      |   |   |   |   |   |
+    1-|---|---x---|---|---|
+      |   |   |   |   |   |
+    2-|---x---|---|---|---x
+      |   |   |   |   |   |
+    3-|---|---|---x---|---|
+    ^--Short Axis
+    Note the following.
+        + Along the "Long Axis" all valid indices (0-5) are used once.
+        + Along the "Short Axis" the values 0,0,1,2,2,3 are selected for this example.
+        + From this we can deduce indices rules for a valid uniform projection.
+            + Along both axis each valid index must be used at least once. This is the definition of uniform projection.
+            + For the short axis the count (c) of the number of times each index is used should satisfy the following,
+                1 >= (c.max - c.min)
+"""
+
+
+def is_valid_set_of_indices(index: Tuple[int], m: int):
+    """
+    Determines if a provided set of indices are valid for a uniform projection.
+        + Number of unique indices is 0-(m-1).
+        + The count of the number of times each indicie appears sattisfies the following,
+            1 >= count.max - count.max
+
+    Parameters
+    ----------
+    index: tuple of ints
+        An index into the
+    m: int
+        Length of the short axis for which indices is being determined.
+
+    Returns
+    -------
+    bool
+        True if valid else false.
+
+    """
+    unique, counts = np.unique(index, return_counts=True)
+    if len(counts) == m and (counts.max() - counts.min()) <= 1:
+        return True
+    else:
+        return False
+
+
+def get_short_axis(n, m):
+    """ Loop through all possible sets selecting on valid sets. """
+    assert n >= m
+    return [i for i in its.product(range(m), repeat=n) if is_valid_set_of_indices(i, m)]
+
+
+def get_2d_ufp_indices(n: int, m: int):
+    assert n >= m
+
+    long_axis = list(range(n))
+    short_axes = get_short_axis(n, m)
+
+    all_plans = []
+
+    for short_axis in short_axes:
+        all_plans.append([(xi, yi) for xi, yi in zip(long_axis, short_axis)])
+    return all_plans
 
 
 if __name__ == "__main__":
