@@ -1,13 +1,16 @@
 
+from typing import List, Iterable, Union, Optional, Tuple
+import itertools as its
+
 import numpy as np
-from typing import List, Iterable, Union, Optional
-from numpy.lib import recfunctions as rfs
 
 
 def _full_factorial_mesh_grid(
         *variables: Iterable[Union[str, int, float, bool]],
         stratify: bool = False,
         random_seed: Optional[int] = None) -> List[np.array]:
+    # TODO: This needs to sort length of variables from long to short.
+    # TODO: Throw error if variable not 1d
 
     # First convert all iterable variable inputs into numpy arrays.
     variable_arrays = [np.array(vi) for vi in variables]
@@ -37,7 +40,9 @@ def _full_factorial_mesh_grid(
                 grids[inx] = grids[inx][low_inxs] + (grids[inx][high_inxs] - grids[inx][low_inxs]) / 2
         else:
             grids[inx] = grids[inx][high_inxs]  # High inx or low inx don't matter here just need the shape
+        grids[inx] = np.reshape(grids[inx], new_shape)
     return grids
+
 
 def full_factorial(
         *variables: Iterable[Union[str, int, float, bool]],
@@ -105,6 +110,7 @@ def full_factorial(
         dtypes = ", ".join([str(arr.dtype) for arr in raveled_grids])
         return np.rec.array(raveled_grids, dtype=dtypes)
 
+
 #def uniform_projection(
 #        *variables: Iterable[Union[str, int, float, bool]],
 #        variable_names: Optional[List[str]] = None,
@@ -112,38 +118,6 @@ def full_factorial(
 #        random_seed: Optional[int] = None) -> np.recarray:
 
 # def random_uniform():
-
-import numpy as np
-from typing import Tuple
-import itertools as its
-
-"""
-Assume that the shape of the axes is sorted from longest to shortest shuch that,
-    S = (s_1, s_2, ..., s_i, s_(i-1), ..., s_N)
-    where,
-        s_i <= s_(i-1)
-Then start be determining a valid uniform projection for the first two axes. Note there are two cases. When s_1==s_2 and
-when s_1>s_2. The first case we will find is a subset of the second case. So we begin with an example of the second
-case.
-EX:
-      0   1   2   3   4   5 <-- Long Axis
-    0-x---|---|---|---x---|
-      |   |   |   |   |   |
-    1-|---|---x---|---|---|
-      |   |   |   |   |   |
-    2-|---x---|---|---|---x
-      |   |   |   |   |   |
-    3-|---|---|---x---|---|
-    ^--Short Axis
-    Note the following.
-        + Along the "Long Axis" all valid indices (0-5) are used once.
-        + Along the "Short Axis" the values 0,0,1,2,2,3 are selected for this example.
-        + From this we can deduce indices rules for a valid uniform projection.
-            + Along both axis each valid index must be used at least once. This is the definition of uniform projection.
-            + For the short axis the count (c) of the number of times each index is used should satisfy the following,
-                1 >= (c.max - c.min)
-"""
-
 
 def is_valid_set_of_indices(index: Tuple[int], m: int):
     """
@@ -179,6 +153,8 @@ def get_short_axis(n, m):
 
 
 def get_2d_ufp_indices(n: int, m: int):
+    # TODO: Needs to be randomized.
+    # TODO: Should become a generator it takes to long to generate all possible options.
     assert n >= m
 
     long_axis = list(range(n))
@@ -190,6 +166,62 @@ def get_2d_ufp_indices(n: int, m: int):
         all_plans.append([(xi, yi) for xi, yi in zip(long_axis, short_axis)])
     return all_plans
 
+"""
+Assume that the shape of the axes is sorted from longest to shortest shuch that,
+    S = (s_1, s_2, ..., s_i, s_(i-1), ..., s_N)
+    where,
+        s_i <= s_(i-1)
+Then start be determining a valid uniform projection for the first two axes. Note there are two cases. When s_1==s_2 and
+when s_1>s_2. The first case we will find is a subset of the second case. So we begin with an example of the second
+case.
+EX:
+      0   1   2   3   4   5 <-- Long Axis
+    0-x---|---|---|---x---|
+      |   |   |   |   |   |
+    1-|---|---x---|---|---|
+      |   |   |   |   |   |
+    2-|---x---|---|---|---x
+      |   |   |   |   |   |
+    3-|---|---|---x---|---|
+    ^--Short Axis
+    Note the following.
+        + Along the "Long Axis" all valid indices (0-5) are used once.
+        + Along the "Short Axis" the values 0,0,1,2,2,3 are selected for this example.
+        + From this we can deduce indices rules for a valid uniform projection.
+            + Along both axis each valid index must be used at least once. This is the definition of uniform projection.
+            + For the short axis the count (c) of the number of times each index is used should satisfy the following,
+                1 >= (c.max - c.min)
+
+Algorithm for multi-dimensional uniform sampling plan.
+    - Let n be the number of axes from which to generate the sample plan. (len(shape))
+    - If n<2 throw an error at least 2 axes are required.
+    - For d1, d2 in zip(shape[::2], shape[1::2])
+        - Create & store a generator for the 2d indices of the uniform projection plan.
+    - Let G = [g1, g2, ..., gi] be the ith generator of 2d uniform projections plans. 
+    - if n%2 == 0 (even number of axes)
+        - Start from the last generator
+        
+    *** Need to re think multi-dim uniform sampling indices. Just because each 2d slice is a uniform projection dosent
+    mean the whole thing is. It will be end up far over sampled. *** Need to re think this based on indicies rules. 
+
+"""
 
 if __name__ == "__main__":
-    pass
+
+    mesh_grid = _full_factorial_mesh_grid([0.0, 1.0, 2.0, 3.0, 4.0],
+                                          ["foo", "bar", "baz"],
+                                          [True, False])
+
+    print("Mesh Grid:")
+    print("Shape:", mesh_grid[0].shape)
+
+    for grid in mesh_grid:
+        print(grid)
+
+    sample_plans = get_2d_ufp_indices(4, 3)
+
+    #print("Sample Plans:")
+    #for plan in sample_plans:
+    #    print(plan)
+
+
