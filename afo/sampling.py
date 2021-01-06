@@ -1,6 +1,6 @@
 
-from typing import List, Iterable, Union, Optional, Tuple
-import itertools as its
+from typing import List, Iterable, Union, Optional, Tuple, Any
+import random
 
 import numpy as np
 
@@ -9,7 +9,6 @@ def _full_factorial_mesh_grid(
         *variables: Iterable[Union[str, int, float, bool]],
         stratify: bool = False,
         random_seed: Optional[int] = None) -> List[np.array]:
-    # TODO: This needs to sort length of variables from long to short.
     # TODO: Throw error if variable not 1d
 
     # First convert all iterable variable inputs into numpy arrays.
@@ -42,6 +41,33 @@ def _full_factorial_mesh_grid(
             grids[inx] = grids[inx][high_inxs]  # High inx or low inx don't matter here just need the shape
         grids[inx] = np.reshape(grids[inx], new_shape)
     return grids
+
+
+def _ufp_single_axis_index_generator(n: int) -> Iterable[int]:
+    """ 
+    A generator that returns a random combinations of integer values from 
+    [0,n-1]. Once n samples have been generated a new random combination of 
+    integer values form [0, n-1].
+    """
+    indices = []
+    while True:
+        if len(indices) == 0:
+            indices = list(range(n))
+            random.shuffle(indices)
+            yield indices.pop()
+        else:
+            yield indices.pop()
+
+
+def _ufp_index_generator(shape: Tuple[int], random_seed: Optional[int] = None) -> Tuple[Tuple[Any]]:
+    """
+    
+    """
+    if random_seed:
+        random.seed(random_seed)
+
+    generators = [_ufp_single_axis_index_generator(n) for n in shape]
+    return tuple([tuple([next(g) for i in range(max(shape))]) for g in generators])
 
 
 def full_factorial(
@@ -111,117 +137,70 @@ def full_factorial(
         return np.rec.array(raveled_grids, dtype=dtypes)
 
 
-#def uniform_projection(
-#        *variables: Iterable[Union[str, int, float, bool]],
-#        variable_names: Optional[List[str]] = None,
-#        stratify: bool = False,
-#        random_seed: Optional[int] = None) -> np.recarray:
-
-# def random_uniform():
-
-def is_valid_set_of_indices(index: Tuple[int], m: int):
+def uniform_projection(
+        *variables: Iterable[Union[str, int, float, bool]],
+        variable_names: Optional[List[str]] = None,
+        stratify: bool = False,
+        random_seed: Optional[int] = None) -> np.recarray:
     """
-    Determines if a provided set of indices are valid for a uniform projection.
-        + Number of unique indices is 0-(m-1).
-        + The count of the number of times each indicie appears sattisfies the following,
-            1 >= count.max - count.max
 
     Parameters
     ----------
-    index: tuple of ints
-        An index into the
-    m: int
-        Length of the short axis for which indices is being determined.
+    variables
+    variable_names
+    stratify
+    random_seed
+
+    Examples
+    --------
+    >>> uniform_projection([0, 1, 2, 3, 4], [0, 1, 2, 3, 4], random_seed=1234)
+    rec.array([(3, 4), (0, 0), (4, 2), (2, 3), (1, 1)],
+              dtype=[('f0', '<i4'), ('f1', '<i4')])
+
+    >>> uniform_projection(np.linspace(0, 1.0, 10), np.linspace(0, 1.0, 5), stratify=True, random_seed=1234)
+    rec.array([(0.81298179, 0.09557936), (0.14139918, 0.29607177),
+               (0.08726206, 0.97732899), (0.71080029, 0.61952345),
+               (0.50034257, 0.14148616), (0.596536  , 0.94799103),
+               (0.2619797 , 0.51083102), (0.41252245, 0.37574171),
+               (0.96714011, 0.68463076)],
+              dtype=[('f0', '<f8'), ('f1', '<f8')])
 
     Returns
     -------
-    bool
-        True if valid else false.
 
     """
-    unique, counts = np.unique(index, return_counts=True)
-    if len(counts) == m and (counts.max() - counts.min()) <= 1:
-        return True
+
+    grids = _full_factorial_mesh_grid(*variables, stratify=stratify, random_seed=random_seed)
+    
+    unfp_indices = _ufp_index_generator(grids[0].shape, random_seed=random_seed)
+    
+    raveled_grids = [np.ravel(grid[unfp_indices]) for grid in grids]
+    
+    if variable_names:
+        dtypes = [(var_name, arr.dtype.name) for arr, var_name in zip(raveled_grids, variable_names)]
+        return np.rec.array(raveled_grids, dtype=dtypes)
     else:
-        return False
+        dtypes = ", ".join([str(arr.dtype) for arr in raveled_grids])
+        return np.rec.array(raveled_grids, dtype=dtypes)
 
+# def random_uniform():
 
-def get_short_axis(n, m):
-    """ Loop through all possible sets selecting on valid sets. """
-    assert n >= m
-    return [i for i in its.product(range(m), repeat=n) if is_valid_set_of_indices(i, m)]
-
-
-def get_2d_ufp_indices(n: int, m: int):
-    # TODO: Needs to be randomized.
-    # TODO: Should become a generator it takes to long to generate all possible options.
-    assert n >= m
-
-    long_axis = list(range(n))
-    short_axes = get_short_axis(n, m)
-
-    all_plans = []
-
-    for short_axis in short_axes:
-        all_plans.append([(xi, yi) for xi, yi in zip(long_axis, short_axis)])
-    return all_plans
-
-"""
-Assume that the shape of the axes is sorted from longest to shortest shuch that,
-    S = (s_1, s_2, ..., s_i, s_(i-1), ..., s_N)
-    where,
-        s_i <= s_(i-1)
-Then start be determining a valid uniform projection for the first two axes. Note there are two cases. When s_1==s_2 and
-when s_1>s_2. The first case we will find is a subset of the second case. So we begin with an example of the second
-case.
-EX:
-      0   1   2   3   4   5 <-- Long Axis
-    0-x---|---|---|---x---|
-      |   |   |   |   |   |
-    1-|---|---x---|---|---|
-      |   |   |   |   |   |
-    2-|---x---|---|---|---x
-      |   |   |   |   |   |
-    3-|---|---|---x---|---|
-    ^--Short Axis
-    Note the following.
-        + Along the "Long Axis" all valid indices (0-5) are used once.
-        + Along the "Short Axis" the values 0,0,1,2,2,3 are selected for this example.
-        + From this we can deduce indices rules for a valid uniform projection.
-            + Along both axis each valid index must be used at least once. This is the definition of uniform projection.
-            + For the short axis the count (c) of the number of times each index is used should satisfy the following,
-                1 >= (c.max - c.min)
-
-Algorithm for multi-dimensional uniform sampling plan.
-    - Let n be the number of axes from which to generate the sample plan. (len(shape))
-    - If n<2 throw an error at least 2 axes are required.
-    - For d1, d2 in zip(shape[::2], shape[1::2])
-        - Create & store a generator for the 2d indices of the uniform projection plan.
-    - Let G = [g1, g2, ..., gi] be the ith generator of 2d uniform projections plans. 
-    - if n%2 == 0 (even number of axes)
-        - Start from the last generator
-        
-    *** Need to re think multi-dim uniform sampling indices. Just because each 2d slice is a uniform projection dosent
-    mean the whole thing is. It will be end up far over sampled. *** Need to re think this based on indicies rules. 
-
-"""
 
 if __name__ == "__main__":
+    import matplotlib.pyplot as plt
 
-    mesh_grid = _full_factorial_mesh_grid([0.0, 1.0, 2.0, 3.0, 4.0],
-                                          ["foo", "bar", "baz"],
-                                          [True, False])
+    x_boundaries = np.linspace(0.0, 10, 5)
+    y_boundaries = np.linspace(0.0, 10, 7)
 
-    print("Mesh Grid:")
-    print("Shape:", mesh_grid[0].shape)
+    ax = plt.subplot()
+    ax.set_xticks(x_boundaries)
+    ax.set_yticks(y_boundaries)
 
-    for grid in mesh_grid:
-        print(grid)
+    ufp_plan = uniform_projection(x_boundaries, y_boundaries,
+                                  variable_names=["x", "y"], stratify=True, random_seed=12345)
 
-    sample_plans = get_2d_ufp_indices(4, 3)
-
-    #print("Sample Plans:")
-    #for plan in sample_plans:
-    #    print(plan)
-
-
+    ax.scatter(ufp_plan.x, ufp_plan.y)
+    ax.set_xlim((min(x_boundaries)-0.25, max(x_boundaries)+0.25))
+    ax.set_ylim((min(y_boundaries) - 0.25, max(y_boundaries) + 0.25))
+    plt.grid(True)
+    plt.show()
